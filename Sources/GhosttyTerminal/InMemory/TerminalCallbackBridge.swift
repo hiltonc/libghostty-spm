@@ -195,6 +195,10 @@ final class TerminalCallbackBridge {
         }
     }
 
+    var handlesOpenURL: Bool {
+        (delegate as? any TerminalSurfaceOpenURLDelegate)?.handlesOpenURL ?? false
+    }
+
     func handleClose(processAlive: Bool) {
         TerminalDebugLog.log(
             .lifecycle,
