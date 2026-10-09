@@ -47,6 +47,7 @@ public struct TerminalSurfaceView: View {
             configuration: context.configuration,
             isSurfaceVisible: context.isSurfaceVisible,
             focusBinding: focusBinding,
+            focusRequest: focusBinding?.isFocused,
         )
         #if canImport(UIKit)
             #if !targetEnvironment(macCatalyst)

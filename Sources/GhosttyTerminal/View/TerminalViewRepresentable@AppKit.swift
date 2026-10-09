@@ -10,26 +10,25 @@
     import SwiftUI
 
     extension TerminalViewRepresentable: NSViewRepresentable {
-        func makeNSView(context _: Context) -> TerminalView {
+        func makeCoordinator() -> TerminalFocusSynchronizer {
+            TerminalFocusSynchronizer()
+        }
+
+        func makeNSView(context viewContext: Context) -> TerminalView {
             let view = context.makePlatformView?() ?? TerminalView(frame: .zero)
             configureView(view, initial: true)
-            view.focusBridge.onFocusChange = { focused in
-                focusBinding.setFocused(focused)
-            }
-            Self.synchronizeFocus(view, with: focusBinding)
+            viewContext.coordinator.attach(to: view, binding: focusBinding, request: focusRequest)
+            viewContext.coordinator.acquireIfRequested()
             return view
         }
 
-        func updateNSView(_ view: TerminalView, context _: Context) {
+        func updateNSView(_ view: TerminalView, context viewContext: Context) {
             configureView(view, initial: false)
-            view.focusBridge.onFocusChange = { focused in
-                focusBinding.setFocused(focused)
-            }
-            Self.synchronizeFocus(view, with: focusBinding)
+            viewContext.coordinator.attach(to: view, binding: focusBinding, request: focusRequest)
         }
 
-        static func dismantleNSView(_ view: TerminalView, coordinator _: ()) {
-            view.focusBridge.onFocusChange = nil
+        static func dismantleNSView(_: TerminalView, coordinator: TerminalFocusSynchronizer) {
+            coordinator.detach()
         }
     }
 #endif

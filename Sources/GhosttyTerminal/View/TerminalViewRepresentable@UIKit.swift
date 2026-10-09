@@ -10,60 +10,25 @@
     import UIKit
 
     extension TerminalViewRepresentable: UIViewRepresentable {
-        func makeCoordinator() -> Coordinator {
-            Coordinator()
+        func makeCoordinator() -> TerminalFocusSynchronizer {
+            TerminalFocusSynchronizer()
         }
 
         func makeUIView(context viewContext: Context) -> TerminalView {
             let view = context.makePlatformView?() ?? TerminalView(frame: .zero)
             configureView(view, initial: true)
-            viewContext.coordinator.attach(to: view, focusBinding: focusBinding)
-            Self.synchronizeFocus(view, with: focusBinding)
+            viewContext.coordinator.attach(to: view, binding: focusBinding, request: focusRequest)
+            viewContext.coordinator.acquireIfRequested()
             return view
         }
 
         func updateUIView(_ view: TerminalView, context viewContext: Context) {
             configureView(view, initial: false)
-            viewContext.coordinator.attach(to: view, focusBinding: focusBinding)
-            Self.synchronizeFocus(view, with: focusBinding)
+            viewContext.coordinator.attach(to: view, binding: focusBinding, request: focusRequest)
         }
 
-        static func dismantleUIView(_: TerminalView, coordinator: Coordinator) {
+        static func dismantleUIView(_: TerminalView, coordinator: TerminalFocusSynchronizer) {
             coordinator.detach()
-        }
-
-        @MainActor
-        final class Coordinator {
-            private weak var view: TerminalView?
-            private var focusBinding: TerminalFocusBinding?
-
-            func attach(
-                to view: TerminalView,
-                focusBinding: TerminalFocusBinding?,
-            ) {
-                self.view = view
-                self.focusBinding = focusBinding
-                view.focusBridge.onFocusChange = { [weak self] focused in
-                    self?.focusBinding.setFocused(focused)
-                }
-                // synchronizeFocus can only act on a view that is in a
-                // window; at launch the focus request precedes the window,
-                // so replay it the moment the view attaches.
-                view.focusBridge.onWindowAttach = { [weak self] in
-                    guard let self, let view = self.view else { return }
-                    TerminalViewRepresentable.synchronizeFocus(
-                        view,
-                        with: focusBinding,
-                    )
-                }
-            }
-
-            func detach() {
-                view?.focusBridge.onFocusChange = nil
-                view?.focusBridge.onWindowAttach = nil
-                focusBinding = nil
-                view = nil
-            }
         }
     }
 #endif

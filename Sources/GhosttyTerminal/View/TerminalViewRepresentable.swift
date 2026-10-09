@@ -24,6 +24,9 @@ struct TerminalViewRepresentable {
     /// was skipped even for the visible surface.
     let isSurfaceVisible: Bool
     let focusBinding: TerminalFocusBinding?
+    /// What `focusBinding` read when this value was built, so a change of
+    /// the request alone still runs the update pass that acts on it.
+    let focusRequest: Bool?
     #if canImport(UIKit)
         #if !targetEnvironment(macCatalyst)
             /// Stored, like `isSurfaceVisible`, so a change to
@@ -94,36 +97,86 @@ struct TerminalViewRepresentable {
         #endif
     }
 
-    static func synchronizeFocus(_ view: TerminalView, with binding: TerminalFocusBinding?) {
-        guard let binding else { return }
+    /// Acquire-only, on both platforms: `FocusState` resets itself to nil
+    /// whenever SwiftUI's own focus system re-evaluates (no native focusable
+    /// view anchors it) and may never take the true the bridge writes, so
+    /// treating false as "resign" drops focus right after a click or the
+    /// keyboard right after it opens. Moving focus between surfaces doesn't
+    /// need the resign either: the old first responder is retired when the
+    /// next one acquires.
+    static func acquireFocus(_ view: TerminalView) {
+        #if canImport(UIKit)
+            guard view.window != nil, !view.isFirstResponder else { return }
+            view.becomeFirstResponder()
+        #elseif canImport(AppKit)
+            guard let window = view.window, window.firstResponder !== view else { return }
+            window.makeFirstResponder(view)
+        #endif
+    }
+}
 
-        DispatchQueue.main.async { [weak view] in
-            // Acquire-only, on both platforms: `FocusState` resets itself to
-            // nil whenever SwiftUI's own focus system re-evaluates (no native
-            // focusable view anchors it) and may never take the true the
-            // bridge writes, so treating false as "resign" drops focus right
-            // after a click or the keyboard right after it opens. Moving
-            // focus between surfaces doesn't need the resign either — the
-            // old first responder is retired when the next one acquires.
-            #if canImport(UIKit)
-                guard let view, view.window != nil else { return }
-                if binding.isFocused, !view.isFirstResponder {
-                    view.becomeFirstResponder()
-                }
-            #elseif canImport(AppKit)
-                guard let view, let window = view.window else { return }
-                if binding.isFocused, window.firstResponder !== view {
-                    window.makeFirstResponder(view)
-                }
-            #endif
+/// Hands the terminal first responder when its focus binding turns true, and
+/// when the view is made or lands in a window while it reads true, but never
+/// on an update that leaves the binding as it was. A menu, a text field or
+/// anything else that takes first responder keeps it however often the
+/// terminal redraws.
+///
+/// Every acquire hops the runloop: it runs from SwiftUI's update pass, where
+/// the first-responder dance must not mutate focus state.
+@MainActor
+final class TerminalFocusSynchronizer {
+    private weak var view: TerminalView?
+    private var binding: TerminalFocusBinding?
+    private var lastRequest: Bool?
+
+    func attach(to view: TerminalView, binding: TerminalFocusBinding?, request: Bool?) {
+        self.view = view
+        self.binding = binding
+        view.focusBridge.onFocusChange = { [weak self] focused in
+            self?.binding.setFocused(focused)
         }
+        #if canImport(UIKit)
+            view.focusBridge.onWindowAttach = { [weak self] in
+                self?.acquireIfRequested()
+            }
+        #endif
+        guard request != lastRequest else { return }
+        lastRequest = request
+        if request == true {
+            DispatchQueue.main.async { [weak view] in
+                guard let view else { return }
+                TerminalViewRepresentable.acquireFocus(view)
+            }
+        }
+    }
+
+    /// Reads the binding after the hop rather than when the view was built:
+    /// a host's `onAppear` writes the request in the same transaction that
+    /// makes the view, and on UIKit that request precedes the window.
+    func acquireIfRequested() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view, let binding else { return }
+            lastRequest = binding.isFocused
+            if binding.isFocused {
+                TerminalViewRepresentable.acquireFocus(view)
+            }
+        }
+    }
+
+    func detach() {
+        view?.focusBridge.onFocusChange = nil
+        #if canImport(UIKit)
+            view?.focusBridge.onWindowAttach = nil
+        #endif
+        binding = nil
+        view = nil
     }
 }
 
 @MainActor
 struct TerminalFocusBinding {
-    private let read: () -> Bool
-    private let write: (Bool) -> Void
+    let read: () -> Bool
+    let write: (Bool) -> Void
 
     var isFocused: Bool {
         read()
